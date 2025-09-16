@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -19,20 +19,23 @@ import {
   Copy,
   Settings,
   Shield,
-  Globe
+  Globe,
+  RefreshCw
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import FHIRService, { FHIRConfig } from "@/services/fhirService";
 
 interface APIEndpoint {
   method: string;
   endpoint: string;
   description: string;
   status: "active" | "inactive" | "testing";
+  required?: boolean;
 }
 
 const practiceFusionEndpoints: APIEndpoint[] = [
-  { method: "GET", endpoint: "/Patient", description: "Search and retrieve patient records", status: "active" },
-  { method: "POST", endpoint: "/Patient", description: "Create new patient record", status: "active" },
+  { method: "GET", endpoint: "/Patient", description: "Search and retrieve patient records", status: "active", required: true },
+  { method: "GET", endpoint: "/Patient/{id}", description: "Get specific patient by ID", status: "active", required: true },
   { method: "PUT", endpoint: "/Patient/{id}", description: "Update patient information", status: "active" },
   { method: "GET", endpoint: "/Appointment", description: "Retrieve appointment schedules", status: "active" },
   { method: "POST", endpoint: "/Appointment", description: "Schedule new appointment", status: "testing" },
@@ -41,366 +44,169 @@ const practiceFusionEndpoints: APIEndpoint[] = [
   { method: "GET", endpoint: "/DiagnosticReport", description: "Retrieve lab results and reports", status: "inactive" },
 ];
 
+// Updated Oracle Health FHIR R4 endpoints based on the API documentation
 const oracleEndpoints: APIEndpoint[] = [
-  { method: "GET", endpoint: "/fhir/Patient", description: "FHIR R4 Patient resource access", status: "active" },
-  { method: "GET", endpoint: "/fhir/Encounter", description: "Patient encounters and visits", status: "active" },
-  { method: "GET", endpoint: "/fhir/Condition", description: "Patient conditions and diagnoses", status: "testing" },
-  { method: "GET", endpoint: "/fhir/MedicationRequest", description: "Prescription and medication data", status: "inactive" },
-  { method: "GET", endpoint: "/fhir/AllergyIntolerance", description: "Patient allergies and intolerances", status: "active" },
-  { method: "POST", endpoint: "/fhir/DocumentReference", description: "Clinical document management", status: "testing" },
+  { method: "GET", endpoint: "/Patient", description: "Search patients by name, ID, identifier, etc.", status: "active", required: true },
+  { method: "GET", endpoint: "/Patient/{id}", description: "Get specific patient by ID", status: "active", required: true },
+  { method: "GET", endpoint: "/Condition", description: "Get patient conditions and diagnoses", status: "active", required: true },
+  { method: "GET", endpoint: "/Condition/{id}", description: "Get specific condition by ID", status: "active" },
+  { method: "GET", endpoint: "/Encounter", description: "Get patient encounters and visits", status: "active", required: true },
+  { method: "GET", endpoint: "/Encounter/{id}", description: "Get specific encounter by ID", status: "active" },
+  { method: "GET", endpoint: "/Procedure", description: "Get patient procedures", status: "active" },
+  { method: "GET", endpoint: "/Procedure/{id}", description: "Get specific procedure by ID", status: "active" },
+  { method: "GET", endpoint: "/metadata", description: "Get FHIR capability statement", status: "active", required: true },
+  { method: "GET", endpoint: "/OperationDefinition/{id}", description: "Get operation definitions", status: "active" },
+  { method: "GET", endpoint: "/StructureDefinition/{id}", description: "Get structure definitions", status: "active" },
 ];
 
-export const APIConfiguration = () => {
-  const [selectedProvider, setSelectedProvider] = useState<"practice-fusion" | "oracle">("practice-fusion");
-  const [credentials, setCredentials] = useState({
+interface APIConfigurationProps {
+  fhirService?: FHIRService;
+  onConfigUpdate?: (service: FHIRService) => void;
+}
+
+export const APIConfiguration = ({ fhirService: initialService, onConfigUpdate }: APIConfigurationProps) => {
+  const [selectedProvider, setSelectedProvider] = useState<"practice-fusion" | "oracle">("oracle");
+  const [credentials, setCredentials] = useState<FHIRConfig>({
+    baseUrl: "https://fhir-open.cerner.com/r4/ec2458f2-1e24-41c8-b71b-0e701af7583d",
     clientId: "",
     clientSecret: "", 
     apiKey: "",
-    baseUrl: "",
+    tenantId: "ec2458f2-1e24-41c8-b71b-0e701af7583d",
     accessToken: ""
   });
   const [connectionStatus, setConnectionStatus] = useState<"connected" | "disconnected" | "testing">("disconnected");
+  const [fhirService, setFhirService] = useState<FHIRService | null>(initialService || null);
+  const [capabilityStatement, setCapabilityStatement] = useState<any>(null);
+  const [testEndpoint, setTestEndpoint] = useState("");
+  const [testParams, setTestParams] = useState("");
+  const [testResponse, setTestResponse] = useState("");
+  const [testHeaders, setTestHeaders] = useState("");
   const { toast } = useToast();
 
-  const handleCredentialChange = (field: string, value: string) => {
+  useEffect(() => {
+    if (selectedProvider === "oracle") {
+      setCredentials(prev => ({
+        ...prev,
+        baseUrl: "https://fhir-open.cerner.com/r4/ec2458f2-1e24-41c8-b71b-0e701af7583d",
+        tenantId: "ec2458f2-1e24-41c8-b71b-0e701af7583d"
+      }));
+    } else {
+      setCredentials(prev => ({
+        ...prev,
+        baseUrl: "https://api.practicefusion.com/fhir",
+        tenantId: ""
+      }));
+    }
+  }, [selectedProvider]);
+
+  const handleCredentialChange = (field: keyof FHIRConfig, value: string) => {
     setCredentials(prev => ({ ...prev, [field]: value }));
   };
 
   const testConnection = async () => {
     setConnectionStatus("testing");
     
-    // Simulate API connection test
-    setTimeout(() => {
-      const success = Math.random() > 0.3; // 70% success rate for demo
-      setConnectionStatus(success ? "connected" : "disconnected");
+    try {
+      const service = new FHIRService(credentials);
+      const result = await service.testConnection();
       
+      if (result.success) {
+        setConnectionStatus("connected");
+        setFhirService(service);
+        
+        // Get capability statement for display
+        try {
+          const capability = await service.getCapabilityStatement();
+          setCapabilityStatement(capability);
+        } catch (e) {
+          console.warn("Could not fetch capability statement:", e);
+        }
+
+        if (onConfigUpdate) {
+          onConfigUpdate(service);
+        }
+        
+        toast({
+          title: "Connection Successful", 
+          description: result.message,
+          variant: "default"
+        });
+      } else {
+        setConnectionStatus("disconnected");
+        setFhirService(null);
+        toast({
+          title: "Connection Failed", 
+          description: result.message,
+          variant: "destructive"
+        });
+      }
+    } catch (error) {
+      setConnectionStatus("disconnected");
+      setFhirService(null);
       toast({
-        title: success ? "Connection Successful" : "Connection Failed", 
-        description: success 
-          ? "Successfully connected to EHR system" 
-          : "Failed to connect. Please check your credentials.",
-        variant: success ? "default" : "destructive"
+        title: "Connection Failed", 
+        description: error instanceof Error ? error.message : "Unknown error occurred",
+        variant: "destructive"
       });
-    }, 2000);
-  };
-
-  const getStatusBadge = (status: APIEndpoint['status']) => {
-    switch (status) {
-      case 'active':
-        return <Badge className="bg-medical-stable text-white">Active</Badge>;
-      case 'testing':
-        return <Badge className="bg-warning text-white">Testing</Badge>;
-      case 'inactive':
-        return <Badge className="bg-medical-inactive text-white">Inactive</Badge>;
-      default:
-        return <Badge variant="outline">Unknown</Badge>;
     }
   };
 
-  const getConnectionStatusIcon = () => {
-    switch (connectionStatus) {
-      case 'connected':
-        return <CheckCircle className="h-5 w-5 text-medical-stable" />;
-      case 'testing':
-        return <AlertCircle className="h-5 w-5 text-warning animate-pulse" />;
-      case 'disconnected':
-        return <XCircle className="h-5 w-5 text-medical-critical" />;
+  const testApiEndpoint = async () => {
+    if (!fhirService || !testEndpoint) {
+      toast({
+        title: "Error",
+        description: "Please connect to FHIR service and select an endpoint first",
+        variant: "destructive"
+      });
+      return;
     }
-  };
 
-  const currentEndpoints = selectedProvider === "practice-fusion" ? practiceFusionEndpoints : oracleEndpoints;
+    try {
+      setTestResponse("Testing...");
+      setTestHeaders("Loading...");
 
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h2 className="text-2xl font-bold text-foreground">API Configuration</h2>
-        <p className="text-muted-foreground">Configure EHR system connections and manage API credentials</p>
-      </div>
+      let params: Record<string, string> = {};
+      if (testParams.trim()) {
+        try {
+          // Try to parse as JSON first
+          if (testParams.trim().startsWith('{')) {
+            params = JSON.parse(testParams);
+          } else {
+            // Parse as query string
+            const urlParams = new URLSearchParams(testParams);
+            params = Object.fromEntries(urlParams);
+          }
+        } catch (e) {
+          throw new Error("Invalid parameters format. Use JSON object or query string format.");
+        }
+      }
 
-      {/* Connection Status */}
-      <Card className="shadow-medical border-l-4 border-l-primary">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="flex items-center gap-2">
-              {getConnectionStatusIcon()}
-              Connection Status
-            </CardTitle>
-            <Badge 
-              className={
-                connectionStatus === 'connected' ? "bg-medical-stable text-white" :
-                connectionStatus === 'testing' ? "bg-warning text-white" :
-                "bg-medical-critical text-white"
-              }
-            >
-              {connectionStatus.charAt(0).toUpperCase() + connectionStatus.slice(1)}
-            </Badge>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            {connectionStatus === 'connected' && "Successfully connected to EHR system. All APIs are available."}
-            {connectionStatus === 'testing' && "Testing connection to EHR system..."}
-            {connectionStatus === 'disconnected' && "Not connected to EHR system. Please configure credentials below."}
-          </p>
-        </CardContent>
-      </Card>
+      let response;
+      const endpoint = testEndpoint.replace('/Patient/{id}', '/Patient').replace('/Condition/{id}', '/Condition');
+      
+      if (endpoint === '/metadata') {
+        response = await fhirService.getCapabilityStatement();
+      } else if (endpoint === '/Patient') {
+        // Ensure required parameters for patient search
+        if (!params._id && !params.identifier && !params.name && !params.given && !params.family) {
+          params = { name: 'Test', _count: '5' }; // Add default search
+        }
+        response = await fhirService.searchPatients(params);
+      } else if (endpoint === '/Condition') {
+        // Need patient ID for condition search
+        if (!params.patient && !params.subject) {
+          throw new Error("Patient ID required for condition search. Add 'patient' parameter.");
+        }
+        response = await fhirService.getPatientConditions(params.patient || params.subject, params);
+      } else if (endpoint === '/Encounter') {
+        // Need patient ID for encounter search  
+        if (!params.patient && !params.subject && !params._id) {
+          throw new Error("Patient ID or Encounter ID required. Add 'patient' or '_id' parameter.");
+        }
+        response = await fhirService.searchEncounters(params);
+      } else {
+        throw new Error("Endpoint not implemented in test console");
+      }
 
-      <Tabs defaultValue="credentials" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="credentials">API Credentials</TabsTrigger>
-          <TabsTrigger value="endpoints">Available Endpoints</TabsTrigger>
-          <TabsTrigger value="testing">API Testing</TabsTrigger>
-        </TabsList>
-
-        {/* API Credentials Tab */}
-        <TabsContent value="credentials" className="space-y-6">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* EHR Provider Selection */}
-            <Card className="shadow-medical">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Server className="h-5 w-5 text-primary" />
-                  EHR Provider
-                </CardTitle>
-                <CardDescription>Select your EHR system provider</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label>EHR System</Label>
-                  <Select value={selectedProvider} onValueChange={(value: any) => setSelectedProvider(value)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="practice-fusion">Practice Fusion FHIR</SelectItem>
-                      <SelectItem value="oracle">Oracle Health Developer</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="p-4 bg-muted rounded-lg">
-                  <h4 className="font-semibold mb-2">
-                    {selectedProvider === "practice-fusion" ? "Practice Fusion" : "Oracle Health"}
-                  </h4>
-                  <p className="text-sm text-muted-foreground mb-2">
-                    {selectedProvider === "practice-fusion" 
-                      ? "FHIR R4 compliant API for patient management and clinical workflows"
-                      : "Comprehensive healthcare developer platform with FHIR R4 support"
-                    }
-                  </p>
-                  <Button variant="outline" size="sm" className="gap-2">
-                    <ExternalLink className="h-3 w-3" />
-                    View Documentation
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Credentials Form */}
-            <Card className="shadow-medical">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Key className="h-5 w-5 text-primary" />
-                  API Credentials
-                </CardTitle>
-                <CardDescription>Enter your production API credentials</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="baseUrl" className="flex items-center gap-2">
-                    <Globe className="h-4 w-4" />
-                    Base URL
-                  </Label>
-                  <Input
-                    id="baseUrl"
-                    value={credentials.baseUrl}
-                    onChange={(e) => handleCredentialChange("baseUrl", e.target.value)}
-                    placeholder={selectedProvider === "practice-fusion" 
-                      ? "https://api.practicefusion.com/fhir" 
-                      : "https://api.oraclehealth.com/fhir"
-                    }
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="clientId">Client ID</Label>
-                  <Input
-                    id="clientId"
-                    value={credentials.clientId}
-                    onChange={(e) => handleCredentialChange("clientId", e.target.value)}
-                    placeholder="Enter your client ID"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="clientSecret">Client Secret</Label>
-                  <Input
-                    id="clientSecret"
-                    type="password"
-                    value={credentials.clientSecret}
-                    onChange={(e) => handleCredentialChange("clientSecret", e.target.value)}
-                    placeholder="Enter your client secret"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="apiKey">API Key</Label>
-                  <Input
-                    id="apiKey"
-                    type="password"
-                    value={credentials.apiKey}
-                    onChange={(e) => handleCredentialChange("apiKey", e.target.value)}
-                    placeholder="Enter your API key"
-                  />
-                </div>
-
-                <div className="flex gap-2">
-                  <Button 
-                    onClick={testConnection} 
-                    disabled={connectionStatus === "testing"}
-                    className="flex-1 bg-gradient-primary hover:opacity-90"
-                  >
-                    {connectionStatus === "testing" ? (
-                      <AlertCircle className="h-4 w-4 mr-2 animate-pulse" />
-                    ) : (
-                      <TestTube2 className="h-4 w-4 mr-2" />
-                    )}
-                    {connectionStatus === "testing" ? "Testing..." : "Test Connection"}
-                  </Button>
-                  <Button variant="outline">
-                    <Settings className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Security Notice */}
-          <Card className="shadow-medical border-l-4 border-l-warning">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Shield className="h-5 w-5 text-warning" />
-                Security & Compliance
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2 text-sm">
-                <p> All credentials are encrypted and stored securely</p>
-                <p> HIPAA compliant data handling and transmission</p>
-                <p> OAuth 2.0 / SMART on FHIR authentication supported</p>
-                <p> Audit logging enabled for all API interactions</p>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Available Endpoints Tab */}
-        <TabsContent value="endpoints" className="space-y-6">
-          <Card className="shadow-medical">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Database className="h-5 w-5 text-primary" />
-                {selectedProvider === "practice-fusion" ? "Practice Fusion" : "Oracle Health"} API Endpoints
-              </CardTitle>
-              <CardDescription>
-                Available API endpoints and their current status
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {currentEndpoints.map((endpoint, index) => (
-                  <div key={index} className="flex items-center justify-between p-4 border border-border rounded-lg hover:bg-muted/30 transition-colors">
-                    <div className="flex items-center gap-4">
-                      <Badge variant="outline" className="font-mono text-xs">
-                        {endpoint.method}
-                      </Badge>
-                      <div>
-                        <code className="text-sm font-mono text-primary">{endpoint.endpoint}</code>
-                        <p className="text-sm text-muted-foreground">{endpoint.description}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {getStatusBadge(endpoint.status)}
-                      <Button variant="outline" size="sm">
-                        <Copy className="h-3 w-3 mr-1" />
-                        Copy
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* API Testing Tab */}
-        <TabsContent value="testing" className="space-y-6">
-          <Card className="shadow-medical">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <TestTube2 className="h-5 w-5 text-primary" />
-                API Testing Console
-              </CardTitle>
-              <CardDescription>Test API endpoints and view responses</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Test Endpoint</Label>
-                    <Select>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select endpoint to test" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {currentEndpoints.map((endpoint, index) => (
-                          <SelectItem key={index} value={endpoint.endpoint}>
-                            {endpoint.method} {endpoint.endpoint}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Request Parameters</Label>
-                    <Textarea
-                      placeholder="Enter JSON parameters or query string..."
-                      rows={4}
-                    />
-                  </div>
-
-                  <Button className="w-full bg-gradient-primary hover:opacity-90">
-                    <TestTube2 className="h-4 w-4 mr-2" />
-                    Send Test Request
-                  </Button>
-                </div>
-
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Response</Label>
-                    <div className="p-4 bg-muted rounded-lg font-mono text-sm min-h-32">
-                      <span className="text-muted-foreground">
-                        Response will appear here...
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label>Response Headers</Label>
-                    <div className="p-4 bg-muted rounded-lg font-mono text-sm">
-                      <span className="text-muted-foreground">
-                        Headers will appear here...
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-    </div>
-  );
-};
+      setTestResponse(JSON.stringify(response, null, 2));
+      setTestHeaders(`Content-Type: application/fhir+json\nFHIR-Version
