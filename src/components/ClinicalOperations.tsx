@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { 
   FileText, 
   Activity, 
@@ -17,7 +18,11 @@ import {
   Eye,
   Plus,
   Save,
-  Clock
+  Clock,
+  AlertCircle,
+  Loader2,
+  Stethoscope,
+  Calendar
 } from "lucide-react";
 
 interface VitalSigns {
@@ -31,14 +36,82 @@ interface VitalSigns {
   bmi: string;
 }
 
-interface ClinicalNote {
-  id: string;
-  patientName: string;
-  provider: string;
-  date: string;
-  type: string;
-  content: string;
-  diagnosis: string[];
+interface FHIRCondition {
+  id?: string;
+  resourceType: "Condition";
+  clinicalStatus?: {
+    coding: Array<{
+      system: string;
+      code: string;
+      display: string;
+    }>;
+  };
+  category?: Array<{
+    coding: Array<{
+      system: string;
+      code: string;
+      display: string;
+    }>;
+  }>;
+  code?: {
+    coding: Array<{
+      system: string;
+      code: string;
+      display: string;
+    }>;
+    text: string;
+  };
+  subject: {
+    reference: string;
+    display?: string;
+  };
+  onsetDateTime?: string;
+  recordedDate?: string;
+}
+
+interface FHIRProcedure {
+  id?: string;
+  resourceType: "Procedure";
+  status: string;
+  code?: {
+    coding: Array<{
+      system: string;
+      code: string;
+      display: string;
+    }>;
+    text: string;
+  };
+  subject: {
+    reference: string;
+    display?: string;
+  };
+  performedDateTime?: string;
+}
+
+interface FHIREncounter {
+  id?: string;
+  resourceType: "Encounter";
+  status: string;
+  class: {
+    system: string;
+    code: string;
+    display: string;
+  };
+  type?: Array<{
+    coding: Array<{
+      system: string;
+      code: string;
+      display: string;
+    }>;
+  }>;
+  subject: {
+    reference: string;
+    display?: string;
+  };
+  period?: {
+    start: string;
+    end?: string;
+  };
 }
 
 const mockVitals: VitalSigns = {
@@ -52,40 +125,249 @@ const mockVitals: VitalSigns = {
   bmi: "25.1"
 };
 
-const mockNotes: ClinicalNote[] = [
-  {
-    id: "1",
-    patientName: "Sarah Johnson",
-    provider: "Dr. Smith",
-    date: "2024-01-12",
-    type: "Progress Note",
-    content: "Patient presents for routine diabetes follow-up. Blood glucose levels have been well-controlled with current medication regimen. HbA1c improved from 8.2% to 7.1%. Patient reports good adherence to dietary recommendations and exercise routine.",
-    diagnosis: ["Type 2 Diabetes Mellitus", "Hypertension"]
+// Mock FHIR service functions (replace with actual service calls)
+const fhirService = {
+  searchConditions: async (patientId: string): Promise<FHIRCondition[]> => {
+    // This would call your actual FHIR service
+    const response = await fetch(`/api/fhir/Condition?patient=${patientId}`, {
+      headers: { 'Accept': 'application/fhir+json' }
+    });
+    const bundle = await response.json();
+    return bundle.entry?.map((entry: any) => entry.resource) || [];
   },
-  {
-    id: "2", 
-    patientName: "Michael Chen",
-    provider: "Dr. Williams",
-    date: "2024-01-10",
-    type: "Consultation Note",
-    content: "64-year-old male with progressive shortness of breath on exertion. Pulmonary function tests show moderate obstruction. Recommending bronchodilator therapy adjustment and pulmonary rehabilitation program enrollment.",
-    diagnosis: ["COPD Exacerbation", "Chronic Bronchitis"]
+
+  createCondition: async (condition: FHIRCondition): Promise<FHIRCondition> => {
+    const response = await fetch('/api/fhir/Condition', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/fhir+json',
+        'Accept': 'application/fhir+json'
+      },
+      body: JSON.stringify(condition)
+    });
+    return await response.json();
+  },
+
+  searchProcedures: async (patientId: string): Promise<FHIRProcedure[]> => {
+    const response = await fetch(`/api/fhir/Procedure?patient=${patientId}`, {
+      headers: { 'Accept': 'application/fhir+json' }
+    });
+    const bundle = await response.json();
+    return bundle.entry?.map((entry: any) => entry.resource) || [];
+  },
+
+  createProcedure: async (procedure: FHIRProcedure): Promise<FHIRProcedure> => {
+    const response = await fetch('/api/fhir/Procedure', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/fhir+json',
+        'Accept': 'application/fhir+json'
+      },
+      body: JSON.stringify(procedure)
+    });
+    return await response.json();
+  },
+
+  searchEncounters: async (patientId: string): Promise<FHIREncounter[]> => {
+    const response = await fetch(`/api/fhir/Encounter?patient=${patientId}`, {
+      headers: { 'Accept': 'application/fhir+json' }
+    });
+    const bundle = await response.json();
+    return bundle.entry?.map((entry: any) => entry.resource) || [];
+  },
+
+  createEncounter: async (encounter: FHIREncounter): Promise<FHIREncounter> => {
+    const response = await fetch('/api/fhir/Encounter', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/fhir+json',
+        'Accept': 'application/fhir+json'
+      },
+      body: JSON.stringify(encounter)
+    });
+    return await response.json();
   }
-];
+};
 
 export const ClinicalOperations = () => {
   const [vitals, setVitals] = useState<VitalSigns>(mockVitals);
-  const [notes] = useState<ClinicalNote[]>(mockNotes);
-  const [activeTab, setActiveTab] = useState<"vitals" | "notes" | "labs" | "medications">("vitals");
-  const [newNote, setNewNote] = useState({
-    patient: "",
-    type: "",
-    content: "",
-    diagnosis: ""
+  const [conditions, setConditions] = useState<FHIRCondition[]>([]);
+  const [procedures, setProcedures] = useState<FHIRProcedure[]>([]);
+  const [encounters, setEncounters] = useState<FHIREncounter[]>([]);
+  const [activeTab, setActiveTab] = useState<"vitals" | "conditions" | "procedures" | "encounters">("vitals");
+  const [selectedPatient, setSelectedPatient] = useState<string>("12724066");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // New condition form
+  const [newCondition, setNewCondition] = useState({
+    code: "",
+    display: "",
+    clinicalStatus: "active",
+    category: "problem-list-item",
+    onsetDate: ""
   });
+
+  // New procedure form
+  const [newProcedure, setNewProcedure] = useState({
+    code: "",
+    display: "",
+    status: "completed",
+    performedDate: ""
+  });
+
+  // New encounter form
+  const [newEncounter, setNewEncounter] = useState({
+    status: "in-progress",
+    class: "outpatient",
+    type: "",
+    typeDisplay: "",
+    startDate: ""
+  });
+
+  useEffect(() => {
+    if (selectedPatient) {
+      loadClinicalData();
+    }
+  }, [selectedPatient, activeTab]);
+
+  const loadClinicalData = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      switch (activeTab) {
+        case "conditions":
+          const conditionsData = await fhirService.searchConditions(selectedPatient);
+          setConditions(conditionsData);
+          break;
+        case "procedures":
+          const proceduresData = await fhirService.searchProcedures(selectedPatient);
+          setProcedures(proceduresData);
+          break;
+        case "encounters":
+          const encountersData = await fhirService.searchEncounters(selectedPatient);
+          setEncounters(encountersData);
+          break;
+      }
+    } catch (err) {
+      setError(`Failed to load ${activeTab}: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleVitalChange = (field: keyof VitalSigns, value: string) => {
     setVitals(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleCreateCondition = async () => {
+    setLoading(true);
+    try {
+      const condition: FHIRCondition = {
+        resourceType: "Condition",
+        clinicalStatus: {
+          coding: [{
+            system: "http://terminology.hl7.org/CodeSystem/condition-clinical",
+            code: newCondition.clinicalStatus,
+            display: newCondition.clinicalStatus === "active" ? "Active" : "Resolved"
+          }]
+        },
+        category: [{
+          coding: [{
+            system: "http://terminology.hl7.org/CodeSystem/condition-category",
+            code: newCondition.category,
+            display: newCondition.category === "problem-list-item" ? "Problem List Item" : "Encounter Diagnosis"
+          }]
+        }],
+        code: {
+          coding: [{
+            system: "http://snomed.info/sct",
+            code: newCondition.code,
+            display: newCondition.display
+          }],
+          text: newCondition.display
+        },
+        subject: {
+          reference: `Patient/${selectedPatient}`
+        },
+        onsetDateTime: newCondition.onsetDate,
+        recordedDate: new Date().toISOString()
+      };
+
+      await fhirService.createCondition(condition);
+      await loadClinicalData();
+      setNewCondition({ code: "", display: "", clinicalStatus: "active", category: "problem-list-item", onsetDate: "" });
+    } catch (err) {
+      setError(`Failed to create condition: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateProcedure = async () => {
+    setLoading(true);
+    try {
+      const procedure: FHIRProcedure = {
+        resourceType: "Procedure",
+        status: newProcedure.status,
+        code: {
+          coding: [{
+            system: "http://snomed.info/sct",
+            code: newProcedure.code,
+            display: newProcedure.display
+          }],
+          text: newProcedure.display
+        },
+        subject: {
+          reference: `Patient/${selectedPatient}`
+        },
+        performedDateTime: newProcedure.performedDate
+      };
+
+      await fhirService.createProcedure(procedure);
+      await loadClinicalData();
+      setNewProcedure({ code: "", display: "", status: "completed", performedDate: "" });
+    } catch (err) {
+      setError(`Failed to create procedure: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateEncounter = async () => {
+    setLoading(true);
+    try {
+      const encounter: FHIREncounter = {
+        resourceType: "Encounter",
+        status: newEncounter.status,
+        class: {
+          system: "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+          code: newEncounter.class.toUpperCase(),
+          display: newEncounter.class === "outpatient" ? "Outpatient" : "Inpatient"
+        },
+        type: newEncounter.type ? [{
+          coding: [{
+            system: "http://snomed.info/sct",
+            code: newEncounter.type,
+            display: newEncounter.typeDisplay
+          }]
+        }] : undefined,
+        subject: {
+          reference: `Patient/${selectedPatient}`
+        },
+        period: {
+          start: newEncounter.startDate
+        }
+      };
+
+      await fhirService.createEncounter(encounter);
+      await loadClinicalData();
+      setNewEncounter({ status: "in-progress", class: "outpatient", type: "", typeDisplay: "", startDate: "" });
+    } catch (err) {
+      setError(`Failed to create encounter: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -93,16 +375,48 @@ export const ClinicalOperations = () => {
       {/* Header */}
       <div>
         <h2 className="text-2xl font-bold text-foreground">Clinical Operations</h2>
-        <p className="text-muted-foreground">Record and manage clinical data, notes, and observations</p>
+        <p className="text-muted-foreground">Record and manage clinical data using FHIR standards</p>
       </div>
+
+      {/* Patient Selection */}
+      <Card className="shadow-medical">
+        <CardHeader>
+          <CardTitle>Patient Selection</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-4 items-end">
+            <div className="space-y-2 flex-1">
+              <Label htmlFor="patient">Patient ID</Label>
+              <Input
+                id="patient"
+                value={selectedPatient}
+                onChange={(e) => setSelectedPatient(e.target.value)}
+                placeholder="Enter Patient ID (e.g., 12724066)"
+              />
+            </div>
+            <Button onClick={loadClinicalData} disabled={!selectedPatient || loading}>
+              {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Load Data
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Error Display */}
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
 
       {/* Quick Navigation */}
       <div className="flex flex-wrap gap-2">
         {[
           { key: "vitals", label: "Vital Signs", icon: Heart },
-          { key: "notes", label: "Clinical Notes", icon: FileText },
-          { key: "labs", label: "Lab Results", icon: TestTube },
-          { key: "medications", label: "Medications", icon: Pill }
+          { key: "conditions", label: "Conditions", icon: Stethoscope },
+          { key: "procedures", label: "Procedures", icon: Activity },
+          { key: "encounters", label: "Encounters", icon: Calendar }
         ].map(({ key, label, icon: Icon }) => (
           <Button
             key={key}
@@ -237,160 +551,239 @@ export const ClinicalOperations = () => {
         </div>
       )}
 
-      {/* Clinical Notes Section */}
-      {activeTab === "notes" && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* New Note Form */}
+      {/* Conditions Section */}
+      {activeTab === "conditions" && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card className="shadow-medical">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Plus className="h-5 w-5 text-primary" />
-                New Clinical Note
+                Add New Condition
               </CardTitle>
-              <CardDescription>Create a new clinical note or observation</CardDescription>
+              <CardDescription>Record a new medical condition or diagnosis</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="patient">Patient</Label>
-                <Select value={newNote.patient} onValueChange={(value) => setNewNote(prev => ({ ...prev, patient: value }))}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select patient" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="sarah">Sarah Johnson</SelectItem>
-                    <SelectItem value="michael">Michael Chen</SelectItem>
-                    <SelectItem value="emma">Emma Rodriguez</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="noteType">Note Type</Label>
-                <Select value={newNote.type} onValueChange={(value) => setNewNote(prev => ({ ...prev, type: value }))}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select note type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="progress">Progress Note</SelectItem>
-                    <SelectItem value="consultation">Consultation</SelectItem>
-                    <SelectItem value="admission">Admission Note</SelectItem>
-                    <SelectItem value="discharge">Discharge Summary</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="diagnosis">Primary Diagnosis</Label>
+                <Label htmlFor="conditionCode">Condition Code</Label>
                 <Input
-                  id="diagnosis"
-                  value={newNote.diagnosis}
-                  onChange={(e) => setNewNote(prev => ({ ...prev, diagnosis: e.target.value }))}
-                  placeholder="Enter diagnosis codes or descriptions"
+                  id="conditionCode"
+                  value={newCondition.code}
+                  onChange={(e) => setNewCondition(prev => ({ ...prev, code: e.target.value }))}
+                  placeholder="SNOMED CT Code (e.g., 73211009)"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="content">Clinical Note</Label>
-                <Textarea
-                  id="content"
-                  value={newNote.content}
-                  onChange={(e) => setNewNote(prev => ({ ...prev, content: e.target.value }))}
-                  placeholder="Enter detailed clinical observations, assessment, and plan..."
-                  rows={6}
+                <Label htmlFor="conditionDisplay">Condition Name</Label>
+                <Input
+                  id="conditionDisplay"
+                  value={newCondition.display}
+                  onChange={(e) => setNewCondition(prev => ({ ...prev, display: e.target.value }))}
+                  placeholder="e.g., Diabetes mellitus"
                 />
               </div>
 
-              <Button className="w-full bg-gradient-primary hover:opacity-90">
-                <Save className="h-4 w-4 mr-2" />
-                Save Clinical Note
+              <div className="space-y-2">
+                <Label htmlFor="clinicalStatus">Clinical Status</Label>
+                <Select value={newCondition.clinicalStatus} onValueChange={(value) => setNewCondition(prev => ({ ...prev, clinicalStatus: value }))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">Active</SelectItem>
+                    <SelectItem value="resolved">Resolved</SelectItem>
+                    <SelectItem value="inactive">Inactive</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="category">Category</Label>
+                <Select value={newCondition.category} onValueChange={(value) => setNewCondition(prev => ({ ...prev, category: value }))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="problem-list-item">Problem List Item</SelectItem>
+                    <SelectItem value="encounter-diagnosis">Encounter Diagnosis</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="onsetDate">Onset Date</Label>
+                <Input
+                  id="onsetDate"
+                  type="date"
+                  value={newCondition.onsetDate}
+                  onChange={(e) => setNewCondition(prev => ({ ...prev, onsetDate: e.target.value }))}
+                />
+              </div>
+
+              <Button 
+                className="w-full bg-gradient-primary hover:opacity-90" 
+                onClick={handleCreateCondition}
+                disabled={loading || !newCondition.code || !newCondition.display}
+              >
+                {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
+                Add Condition
               </Button>
             </CardContent>
           </Card>
 
-          {/* Recent Notes */}
-          <div className="lg:col-span-2">
-            <Card className="shadow-medical">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <FileText className="h-5 w-5 text-primary" />
-                  Recent Clinical Notes
-                </CardTitle>
-                <CardDescription>Latest clinical documentation and notes</CardDescription>
-              </CardHeader>
-              <CardContent>
+          <Card className="shadow-medical">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Stethoscope className="h-5 w-5 text-primary" />
+                Patient Conditions
+              </CardTitle>
+              <CardDescription>Current and historical medical conditions</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="h-8 w-8 animate-spin" />
+                </div>
+              ) : conditions.length > 0 ? (
                 <div className="space-y-4">
-                  {notes.map((note) => (
-                    <div key={note.id} className="p-4 border border-border rounded-lg hover:bg-muted/30 transition-colors">
-                      <div className="flex justify-between items-start mb-3">
-                        <div>
-                          <h3 className="font-semibold text-foreground">{note.patientName}</h3>
-                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <span>{note.provider}</span>
-                            <span>•</span>
-                            <Clock className="h-3 w-3" />
-                            <span>{note.date}</span>
-                            <span>•</span>
-                            <Badge variant="outline" className="text-xs">{note.type}</Badge>
-                          </div>
-                        </div>
-                        <Button variant="outline" size="sm">
-                          <Eye className="h-3 w-3 mr-1" />
-                          View
-                        </Button>
+                  {conditions.map((condition, index) => (
+                    <div key={condition.id || index} className="p-4 border border-border rounded-lg">
+                      <div className="flex justify-between items-start mb-2">
+                        <h3 className="font-semibold text-foreground">
+                          {condition.code?.text || condition.code?.coding?.[0]?.display || 'Unknown Condition'}
+                        </h3>
+                        <Badge 
+                          variant={condition.clinicalStatus?.coding?.[0]?.code === 'active' ? 'destructive' : 'secondary'}
+                          className="text-xs"
+                        >
+                          {condition.clinicalStatus?.coding?.[0]?.display || 'Unknown Status'}
+                        </Badge>
                       </div>
-                      
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap gap-1">
-                          {note.diagnosis.map((dx, index) => (
-                            <Badge key={index} className="bg-primary-lighter text-primary text-xs">
-                              {dx}
-                            </Badge>
-                          ))}
-                        </div>
-                        <p className="text-sm text-foreground line-clamp-3">{note.content}</p>
+                      <div className="text-sm text-muted-foreground space-y-1">
+                        <div>Category: {condition.category?.[0]?.coding?.[0]?.display || 'Unspecified'}</div>
+                        {condition.onsetDateTime && (
+                          <div>Onset: {new Date(condition.onsetDateTime).toLocaleDateString()}</div>
+                        )}
+                        {condition.recordedDate && (
+                          <div>Recorded: {new Date(condition.recordedDate).toLocaleDateString()}</div>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
-              </CardContent>
-            </Card>
-          </div>
+              ) : (
+                <div className="text-center py-8 text-muted-foreground">
+                  No conditions found for this patient
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </div>
       )}
 
-      {/* Lab Results Placeholder */}
-      {activeTab === "labs" && (
-        <Card className="shadow-medical">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <TestTube className="h-5 w-5 text-primary" />
-              Laboratory Results
-            </CardTitle>
-            <CardDescription>View and manage laboratory test results</CardDescription>
-          </CardHeader>
-          <CardContent className="py-12 text-center">
-            <TestTube className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <p className="text-muted-foreground">Laboratory results interface will be integrated with EHR API</p>
-          </CardContent>
-        </Card>
-      )}
+      {/* Procedures Section */}
+      {activeTab === "procedures" && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card className="shadow-medical">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Plus className="h-5 w-5 text-primary" />
+                Record New Procedure
+              </CardTitle>
+              <CardDescription>Document a medical procedure or intervention</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="procedureCode">Procedure Code</Label>
+                <Input
+                  id="procedureCode"
+                  value={newProcedure.code}
+                  onChange={(e) => setNewProcedure(prev => ({ ...prev, code: e.target.value }))}
+                  placeholder="SNOMED CT Code (e.g., 80146002)"
+                />
+              </div>
 
-      {/* Medications Placeholder */}
-      {activeTab === "medications" && (
-        <Card className="shadow-medical">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Pill className="h-5 w-5 text-primary" />
-              Medication Management
-            </CardTitle>
-            <CardDescription>Manage patient medications and prescriptions</CardDescription>
-          </CardHeader>
-          <CardContent className="py-12 text-center">
-            <Pill className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-            <p className="text-muted-foreground">Medication management interface will be integrated with EHR API</p>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  );
-};
+              <div className="space-y-2">
+                <Label htmlFor="procedureDisplay">Procedure Name</Label>
+                <Input
+                  id="procedureDisplay"
+                  value={newProcedure.display}
+                  onChange={(e) => setNewProcedure(prev => ({ ...prev, display: e.target.value }))}
+                  placeholder="e.g., Appendectomy"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="procedureStatus">Status</Label>
+                <Select value={newProcedure.status} onValueChange={(value) => setNewProcedure(prev => ({ ...prev, status: value }))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="completed">Completed</SelectItem>
+                    <SelectItem value="in-progress">In Progress</SelectItem>
+                    <SelectItem value="not-done">Not Done</SelectItem>
+                    <SelectItem value="preparation">Preparation</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="performedDate">Performed Date</Label>
+                <Input
+                  id="performedDate"
+                  type="datetime-local"
+                  value={newProcedure.performedDate}
+                  onChange={(e) => setNewProcedure(prev => ({ ...prev, performedDate: e.target.value }))}
+                />
+              </div>
+
+              <Button 
+                className="w-full bg-gradient-primary hover:opacity-90" 
+                onClick={handleCreateProcedure}
+                disabled={loading || !newProcedure.code || !newProcedure.display}
+              >
+                {loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
+                Record Procedure
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-medical">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Activity className="h-5 w-5 text-primary" />
+                Patient Procedures
+              </CardTitle>
+              <CardDescription>Recorded medical procedures and interventions</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {loading ? (
+                <div className="flex justify-center py-8">
+                  <Loader2 className="h-8 w-8 animate-spin" />
+                </div>
+              ) : procedures.length > 0 ? (
+                <div className="space-y-4">
+                  {procedures.map((procedure, index) => (
+                    <div key={procedure.id || index} className="p-4 border border-border rounded-lg">
+                      <div className="flex justify-between items-start mb-2">
+                        <h3 className="font-semibold text-foreground">
+                          {procedure.code?.text || procedure.code?.coding?.[0]?.display || 'Unknown Procedure'}
+                        </h3>
+                        <Badge 
+                          variant={procedure.status === 'completed' ? 'default' : 'secondary'}
+                          className="text-xs"
+                        >
+                          {procedure.status}
+                        </Badge>
+                      </div>
+                      <div className="text-sm text-muted-foreground">
+                        {procedure.performedDateTime && (
+                          <div>Performed: {new Date(procedure.performedDateTime).toLocaleDateString()}</div>
+                        )}
+                        {procedure.code?.coding?.[0]?.code && (
+                          <div>Code: {procedure.code.coding[0].code}</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
