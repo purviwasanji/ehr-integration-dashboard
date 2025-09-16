@@ -4,7 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/index";
-import NotFound from "./pages/NotFound";
+import NotFound from "./pages/notfound";
 
 const queryClient = new QueryClient();
 
